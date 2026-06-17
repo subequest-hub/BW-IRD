@@ -2,12 +2,13 @@
 // Strategy: Network First — always fetches fresh, falls back to cache offline.
 // Uses versioned cache name so new deploys bust the old cache automatically.
 
-const CACHE = "rs-v1.3.1";
+const CACHE = "rs-v1.4.2";
 
 const PRECACHE = [
   "./",
   "./index.html",
   "./manifest.json",
+  "./icon.png",
   "https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js",
