@@ -623,7 +623,7 @@ function PhotoScanner({ onExtracted, onSkip }) {
       try {
         log("Calling Anthropic API...");
         const resp = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST", headers: { "Content-Type": "application/json" },
+          method: "POST", headers: { "Content-Type": "application/json", "anthropic-dangerous-direct-browser-access": "true" },
           body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 2048, messages: [{ role: "user", content: [
             { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
             { type: "text", text: `You are reading a Beverly Hills hotel In-Room Dining (IRD) ticket. Extract the fields below and respond ONLY with valid JSON — no markdown, no explanation, no extra text.
@@ -1180,7 +1180,7 @@ function MenuTab() {
 }
 
 // ─── VERSION ──────────────────────────────────────────────────────────────────
-const APP_VERSION = "1.3.0";
+const APP_VERSION = "1.3.1";
 const APP_UPDATED = "Jun 16, 2026";
 
 // ─── SETTINGS TAB ─────────────────────────────────────────────────────────────
@@ -1347,6 +1347,7 @@ function SettingsTab({ data, setData }) {
       <div style={{ ...S.card, marginBottom: 24 }}>
         <div style={{ fontSize: 13, color: "#7A9BBF", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>📝 Changelog</div>
         {[
+          { v: "1.3.1", date: "Jun 16, 2026", notes: ["Fixed photo scan CORS error (Failed to fetch)", "Fixed image resize not applying before API call"] },
           { v: "1.3.0", date: "Jun 16, 2026", notes: ["Added Settings tab with install & version info", "Added image resize before AI scan (fixes large photo errors)", "Added PWA offline support & service worker", "Improved ticket extraction prompt (16 real tickets trained)"] },
           { v: "1.2.0", date: "Jun 16, 2026", notes: ["Added full menu picker (8 menus) with options modal", "Added AI photo ticket scanner", "Added Menu lookup tab with search"] },
           { v: "1.1.0", date: "Jun 16, 2026", notes: ["Added Amenities tab with DND support", "Added guest interaction logging", "Added fire status checker"] },
