@@ -588,13 +588,38 @@ function PhotoScanner({ onExtracted, onSkip }) {
   const handleFile = async (file) => {
     log(`handleFile called — file: ${file ? file.name + " " + file.type + " " + file.size + "b" : "null"}`);
     if (!file) { log("No file, returning"); return; }
+
+    // Resize image before sending — shrink to max 1000px, quality 0.7
+    const resizeImage = (file) => new Promise((resolve) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const MAX = 1000;
+        let w = img.width, h = img.height;
+        if (w > MAX || h > MAX) {
+          if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+          else { w = Math.round(w * MAX / h); h = MAX; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL("image/jpeg", 0.7));
+      };
+      img.src = url;
+    });
+
     const reader = new FileReader();
     reader.onload = async (e) => {
-      const base64 = e.target.result.split(",")[1];
-      const mediaType = (file.type && file.type.startsWith("image/")) ? file.type : "image/jpeg";
-      log(`FileReader loaded — mediaType: ${mediaType}, base64 length: ${base64.length}`);
+      log(`FileReader loaded — original size: ${file.size} bytes, resizing...`);
       setPreview(e.target.result);
       setStatus("loading");
+
+      // Resize before sending to API
+      const resized = await resizeImage(file);
+      const base64 = resized.split(",")[1];
+      const mediaType = "image/jpeg";
+      log(`Resized — new base64 length: ${base64.length}`);
       try {
         log("Calling Anthropic API...");
         const resp = await fetch("https://api.anthropic.com/v1/messages", {
