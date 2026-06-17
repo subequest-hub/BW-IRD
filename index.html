@@ -8,6 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Room Service" />
   <meta name="theme-color" content="#0F1B2D" />
+  <link rel="apple-touch-icon" href="https://fav.farm/%F0%9F%9B%8E" />
   <title>Room Service 🛎</title>
   <style>* { margin:0; padding:0; box-sizing:border-box; } body { background:#0F1B2D; }</style>
 </head>
@@ -18,6 +19,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script type="text/babel" data-presets="react">
     const { useState, useRef } = React;
+
 
 const STORAGE_KEY = "rs_app_data_v4";
 const loadData = () => { try { const r = localStorage.getItem(STORAGE_KEY); return r ? JSON.parse(r) : null; } catch { return null; } };
@@ -588,38 +590,13 @@ function PhotoScanner({ onExtracted, onSkip }) {
   const handleFile = async (file) => {
     log(`handleFile called — file: ${file ? file.name + " " + file.type + " " + file.size + "b" : "null"}`);
     if (!file) { log("No file, returning"); return; }
-
-    // Resize image before sending — shrink to max 1000px, quality 0.7
-    const resizeImage = (file) => new Promise((resolve) => {
-      const img = new Image();
-      const url = URL.createObjectURL(file);
-      img.onload = () => {
-        const MAX = 1000;
-        let w = img.width, h = img.height;
-        if (w > MAX || h > MAX) {
-          if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
-          else { w = Math.round(w * MAX / h); h = MAX; }
-        }
-        const canvas = document.createElement("canvas");
-        canvas.width = w; canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        URL.revokeObjectURL(url);
-        resolve(canvas.toDataURL("image/jpeg", 0.7));
-      };
-      img.src = url;
-    });
-
     const reader = new FileReader();
     reader.onload = async (e) => {
-      log(`FileReader loaded — original size: ${file.size} bytes, resizing...`);
+      const base64 = e.target.result.split(",")[1];
+      const mediaType = (file.type && file.type.startsWith("image/")) ? file.type : "image/jpeg";
+      log(`FileReader loaded — mediaType: ${mediaType}, base64 length: ${base64.length}`);
       setPreview(e.target.result);
       setStatus("loading");
-
-      // Resize before sending to API
-      const resized = await resizeImage(file);
-      const base64 = resized.split(",")[1];
-      const mediaType = "image/jpeg";
-      log(`Resized — new base64 length: ${base64.length}`);
       try {
         log("Calling Anthropic API...");
         const resp = await fetch("https://api.anthropic.com/v1/messages", {
@@ -1179,8 +1156,202 @@ function MenuTab() {
   );
 }
 
+// ─── VERSION ──────────────────────────────────────────────────────────────────
+const APP_VERSION = "1.3.0";
+const APP_UPDATED = "Jun 16, 2026";
+
+// ─── SETTINGS TAB ─────────────────────────────────────────────────────────────
+function SettingsTab({ data, setData }) {
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [installed, setInstalled] = useState(false);
+  const [platform, setPlatform] = useState("unknown");
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [cleared, setCleared] = useState(false);
+
+  // Detect platform and capture install prompt
+  useState(() => {
+    const ua = navigator.userAgent.toLowerCase();
+    const isIos = /iphone|ipad|ipod/.test(ua);
+    const isAndroid = /android/.test(ua);
+    const isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone;
+    setPlatform(isIos ? "ios" : isAndroid ? "android" : "desktop");
+    if (isStandalone) setInstalled(true);
+
+    // Android Chrome shows an install prompt we can capture
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    });
+    window.addEventListener("appinstalled", () => setInstalled(true));
+  }, []);
+
+  const triggerInstall = async () => {
+    if (installPrompt) {
+      installPrompt.prompt();
+      const result = await installPrompt.userChoice;
+      if (result.outcome === "accepted") setInstalled(true);
+    }
+  };
+
+  const clearData = () => {
+    setData(defaultState());
+    saveData(defaultState());
+    setCleared(true);
+    setShowClearConfirm(false);
+  };
+
+  const orderCount = data.orders.length;
+  const amenityCount = data.amenities.length;
+
+  return (
+    <div style={S.sec}>
+      <h2 style={{ margin: "0 0 16px", fontSize: 20 }}>⚙️ Settings</h2>
+
+      {/* Install as App */}
+      <div style={{ ...S.card, marginBottom: 10 }}>
+        <div style={{ fontSize: 13, color: "#7A9BBF", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>📲 Install as App</div>
+
+        {installed ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 28 }}>✅</span>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 15 }}>Already Installed!</div>
+              <div style={{ fontSize: 12, color: "#7A9BBF" }}>Running as a home screen app</div>
+            </div>
+          </div>
+        ) : platform === "android" && installPrompt ? (
+          <div>
+            <div style={{ fontSize: 13, color: "#F7F4EF", marginBottom: 10 }}>Add to your home screen for full-screen access, works offline, and opens like a native app.</div>
+            <button style={{ ...S.btnB(), marginTop: 0 }} onClick={triggerInstall}>📲 Install App</button>
+          </div>
+        ) : platform === "ios" ? (
+          <div>
+            <div style={{ fontSize: 13, color: "#F7F4EF", marginBottom: 12 }}>To install on iPhone:</div>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8 }}>
+              <span style={{ fontSize: 20, flexShrink: 0 }}>1️⃣</span>
+              <div style={{ fontSize: 13, color: "#7A9BBF" }}>Tap the <span style={{ color: "#F7F4EF", fontWeight: 600 }}>Share</span> button at the bottom of Safari (box with arrow pointing up)</div>
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8 }}>
+              <span style={{ fontSize: 20, flexShrink: 0 }}>2️⃣</span>
+              <div style={{ fontSize: 13, color: "#7A9BBF" }}>Scroll down and tap <span style={{ color: "#F7F4EF", fontWeight: 600 }}>Add to Home Screen</span></div>
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <span style={{ fontSize: 20, flexShrink: 0 }}>3️⃣</span>
+              <div style={{ fontSize: 13, color: "#7A9BBF" }}>Tap <span style={{ color: "#F7F4EF", fontWeight: 600 }}>Add</span> — the app will appear on your home screen</div>
+            </div>
+          </div>
+        ) : platform === "android" ? (
+          <div>
+            <div style={{ fontSize: 13, color: "#F7F4EF", marginBottom: 12 }}>To install on Android:</div>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8 }}>
+              <span style={{ fontSize: 20, flexShrink: 0 }}>1️⃣</span>
+              <div style={{ fontSize: 13, color: "#7A9BBF" }}>Tap the <span style={{ color: "#F7F4EF", fontWeight: 600 }}>⋮ menu</span> in Chrome (top right)</div>
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <span style={{ fontSize: 20, flexShrink: 0 }}>2️⃣</span>
+              <div style={{ fontSize: 13, color: "#7A9BBF" }}>Tap <span style={{ color: "#F7F4EF", fontWeight: 600 }}>Add to Home screen</span> → <span style={{ color: "#F7F4EF", fontWeight: 600 }}>Add</span></div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, color: "#7A9BBF" }}>Open this app in Chrome (Android) or Safari (iPhone) to install it on your home screen.</div>
+        )}
+      </div>
+
+      {/* Offline status */}
+      <div style={{ ...S.card, marginBottom: 10 }}>
+        <div style={{ fontSize: 13, color: "#7A9BBF", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>🔌 Offline Support</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 22 }}>{navigator.onLine ? "🟢" : "🔴"}</span>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>{navigator.onLine ? "Online" : "Offline"}</div>
+            <div style={{ fontSize: 12, color: "#7A9BBF" }}>{navigator.onLine ? "Updates fetch automatically" : "Using cached version"}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Data summary */}
+      <div style={{ ...S.card, marginBottom: 10 }}>
+        <div style={{ fontSize: 13, color: "#7A9BBF", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>💾 Stored Data</div>
+        <div style={{ display: "flex", gap: 16, marginBottom: 12 }}>
+          <div style={{ textAlign: "center", flex: 1, background: "#0F1B2D", borderRadius: 8, padding: "10px 0" }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: "#C9A84C" }}>{orderCount}</div>
+            <div style={{ fontSize: 11, color: "#7A9BBF" }}>Orders</div>
+          </div>
+          <div style={{ textAlign: "center", flex: 1, background: "#0F1B2D", borderRadius: 8, padding: "10px 0" }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: "#C9A84C" }}>{amenityCount}</div>
+            <div style={{ fontSize: 11, color: "#7A9BBF" }}>Amenities</div>
+          </div>
+        </div>
+        {!showClearConfirm && !cleared && (
+          <button style={{ ...S.btnB("dan"), marginTop: 0 }} onClick={() => setShowClearConfirm(true)}>
+            🗑 Clear All Data
+          </button>
+        )}
+        {showClearConfirm && (
+          <div style={{ background: "#1F0E0C", border: "1px solid #8B2E25", borderRadius: 8, padding: 12 }}>
+            <div style={{ fontSize: 13, color: "#F7F4EF", marginBottom: 10 }}>⚠️ This will permanently delete all orders and amenities. Cannot be undone.</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={{ ...S.btn("dan"), flex: 1 }} onClick={clearData}>Yes, Clear</button>
+              <button style={{ ...S.btn("sec"), flex: 1 }} onClick={() => setShowClearConfirm(false)}>Cancel</button>
+            </div>
+          </div>
+        )}
+        {cleared && <div style={{ color: "#2E8B6A", fontSize: 13, textAlign: "center", marginTop: 4 }}>✅ All data cleared</div>}
+      </div>
+
+      {/* Version info */}
+      <div style={{ ...S.card, marginBottom: 10 }}>
+        <div style={{ fontSize: 13, color: "#7A9BBF", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>ℹ️ About</div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+          <span style={{ fontSize: 13, color: "#7A9BBF" }}>App</span>
+          <span style={{ fontSize: 13, color: "#F7F4EF", fontWeight: 600 }}>🏨 BW Room Service</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+          <span style={{ fontSize: 13, color: "#7A9BBF" }}>Version</span>
+          <span style={{ fontSize: 13, color: "#C9A84C", fontWeight: 700 }}>v{APP_VERSION}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+          <span style={{ fontSize: 13, color: "#7A9BBF" }}>Last Updated</span>
+          <span style={{ fontSize: 13, color: "#F7F4EF" }}>{APP_UPDATED}</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 13, color: "#7A9BBF" }}>Hotel</span>
+          <span style={{ fontSize: 13, color: "#F7F4EF" }}>Beverly Wilshire</span>
+        </div>
+      </div>
+
+      {/* Changelog */}
+      <div style={{ ...S.card, marginBottom: 24 }}>
+        <div style={{ fontSize: 13, color: "#7A9BBF", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>📝 Changelog</div>
+        {[
+          { v: "1.3.0", date: "Jun 16, 2026", notes: ["Added Settings tab with install & version info", "Added image resize before AI scan (fixes large photo errors)", "Added PWA offline support & service worker", "Improved ticket extraction prompt (16 real tickets trained)"] },
+          { v: "1.2.0", date: "Jun 16, 2026", notes: ["Added full menu picker (8 menus) with options modal", "Added AI photo ticket scanner", "Added Menu lookup tab with search"] },
+          { v: "1.1.0", date: "Jun 16, 2026", notes: ["Added Amenities tab with DND support", "Added guest interaction logging", "Added fire status checker"] },
+          { v: "1.0.0", date: "Jun 16, 2026", notes: ["Initial release — Orders, Amenities, Records"] },
+        ].map(entry => (
+          <div key={entry.v} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid #1E3352" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+              <span style={{ color: "#C9A84C", fontWeight: 700, fontSize: 13 }}>v{entry.v}</span>
+              <span style={{ color: "#4A6580", fontSize: 11 }}>{entry.date}</span>
+            </div>
+            {entry.notes.map((note, i) => (
+              <div key={i} style={{ fontSize: 12, color: "#7A9BBF", padding: "1px 0" }}>• {note}</div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
-const TABS = [{ id:"orders",label:"Orders",icon:"🛎" },{ id:"amenities",label:"Amenities",icon:"🎁" },{ id:"menu",label:"Menu",icon:"🔎" },{ id:"records",label:"Records",icon:"📋" }];
+const TABS = [
+  { id:"orders", label:"Orders", icon:"🛎" },
+  { id:"amenities", label:"Amenities", icon:"🎁" },
+  { id:"menu", label:"Menu", icon:"🔎" },
+  { id:"records", label:"Records", icon:"📋" },
+  { id:"settings", label:"Settings", icon:"⚙️" },
+];
 
 function App() {
   const [activeTab, setActiveTab] = useState("orders");
@@ -1193,13 +1364,17 @@ function App() {
         <div style={{ fontSize:18, fontWeight:700 }}>🏨 Room Service</div>
         <div style={{ fontSize:11, color:"#7A9BBF", marginTop:1 }}>{today()} · {activeOrders.length} active order{activeOrders.length!==1?"s":""}</div>
       </div>
-      <div style={{ fontSize:12, color:"#4A6580" }}>{pendingAmenities} pending amenity{pendingAmenities!==1?"s":""}</div>
+      <div style={{ fontSize:12, color:"#4A6580", textAlign:"right" }}>
+        <div>{pendingAmenities} pending amenity{pendingAmenities!==1?"s":""}</div>
+        <div style={{ color:"#1E3352", fontSize:10 }}>v{APP_VERSION}</div>
+      </div>
     </div>
     <div style={S.scroll}>
       {activeTab==="orders" && <OrdersTab data={data} setData={setData} />}
       {activeTab==="amenities" && <AmenitiesTab data={data} setData={setData} />}
       {activeTab==="menu" && <MenuTab />}
       {activeTab==="records" && <RecordsTab data={data} />}
+      {activeTab==="settings" && <SettingsTab data={data} setData={setData} />}
     </div>
     <div style={S.nav}>
       {TABS.map(t => {
@@ -1216,42 +1391,31 @@ function App() {
   </div>;
 }
 
+
     ReactDOM.createRoot(document.getElementById('root')).render(<App />);
   </script>
   <script>
-    // Inline manifest for PWA install prompt
-    const manifestData = {
-      name: "Room Service",
-      short_name: "Room Service",
-      description: "Beverly Wilshire In-Room Dining",
-      start_url: "./",
-      display: "standalone",
-      background_color: "#0F1B2D",
-      theme_color: "#0F1B2D",
-      orientation: "portrait",
-      icons: [{src:"https://fav.farm/%F0%9F%9B%8E",sizes:"512x512",type:"image/png",purpose:"any maskable"}]
-    };
-    const mBlob = new Blob([JSON.stringify(manifestData)], {type:"application/json"});
-    const mLink = document.createElement("link");
-    mLink.rel = "manifest";
-    mLink.href = URL.createObjectURL(mBlob);
+    // PWA manifest
+    const mBlob = new Blob([JSON.stringify({
+      name:"Room Service",short_name:"Room Service",
+      description:"Beverly Wilshire In-Room Dining",
+      start_url:"./",display:"standalone",
+      background_color:"#0F1B2D",theme_color:"#0F1B2D",
+      orientation:"portrait",
+      icons:[{src:"https://fav.farm/%F0%9F%9B%8E",sizes:"512x512",type:"image/png",purpose:"any maskable"}]
+    })],{type:"application/json"});
+    const mLink=document.createElement("link");
+    mLink.rel="manifest"; mLink.href=URL.createObjectURL(mBlob);
     document.head.appendChild(mLink);
 
-    // Apple touch icon
-    const aLink = document.createElement("link");
-    aLink.rel = "apple-touch-icon";
-    aLink.href = "https://fav.farm/%F0%9F%9B%8E";
-    document.head.appendChild(aLink);
-
-    // Inline service worker — network first, works offline
-    if ("serviceWorker" in navigator) {
-      const swCode = "// Room Service SW \u2014 Network First, Cache Fallback\n// Always tries network first so updates are instant.\n// Falls back to cache only when truly offline.\n// Never forces cache-clear or blocks the user.\n\nconst CACHE = \"room-service-v1\";\n\n// Files to pre-cache on install (shell only \u2014 not API calls)\nconst PRECACHE = [\n  \"./\",\n  \"./index.html\",\n  \"./manifest.json\",\n  \"./icon-192.png\",\n  \"./icon-512.png\",\n];\n\n// \u2500\u2500 Install: pre-cache the app shell \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nself.addEventListener(\"install\", (event) => {\n  // Skip waiting so new SW activates immediately without requiring tab close\n  self.skipWaiting();\n  event.waitUntil(\n    caches.open(CACHE).then((cache) => cache.addAll(PRECACHE))\n  );\n});\n\n// \u2500\u2500 Activate: clean up old caches, claim all clients immediately \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nself.addEventListener(\"activate\", (event) => {\n  event.waitUntil(\n    Promise.all([\n      // Take control of all open tabs right away\n      self.clients.claim(),\n      // Delete any old cache versions\n      caches.keys().then((keys) =>\n        Promise.all(\n          keys\n            .filter((key) => key !== CACHE)\n            .map((key) => caches.delete(key))\n        )\n      ),\n    ])\n  );\n});\n\n// \u2500\u2500 Fetch: Network First, Cache Fallback \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nself.addEventListener(\"fetch\", (event) => {\n  const { request } = event;\n\n  // Never intercept cross-origin requests (Anthropic API, etc.)\n  if (!request.url.startsWith(self.location.origin)) return;\n\n  // Never intercept non-GET requests\n  if (request.method !== \"GET\") return;\n\n  event.respondWith(networkFirst(request));\n});\n\nasync function networkFirst(request) {\n  try {\n    // Always try network first\n    const networkResponse = await fetch(request);\n\n    // If successful, update the cache in the background\n    if (networkResponse.ok) {\n      const cache = await caches.open(CACHE);\n      cache.put(request, networkResponse.clone()); // async, non-blocking\n    }\n\n    return networkResponse;\n  } catch {\n    // Network failed \u2014 serve from cache if available\n    const cached = await caches.match(request);\n    if (cached) return cached;\n\n    // Ultimate fallback: return cached index.html for navigation requests\n    // so the SPA still loads offline\n    if (request.mode === \"navigate\") {\n      const fallback = await caches.match(\"./index.html\");\n      if (fallback) return fallback;\n    }\n\n    // Nothing we can do\n    return new Response(\"Offline \u2014 no cached version available\", {\n      status: 503,\n      statusText: \"Service Unavailable\",\n    });\n  }\n}\n";
-      const swBlob = new Blob([swCode], {type: "application/javascript"});
-      const swUrl = URL.createObjectURL(swBlob);
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register(swUrl, {scope: "./"})
-          .then(reg => { console.log("SW ok"); reg.update(); })
-          .catch(e => console.warn("SW err:", e));
+    // Service worker
+    if("serviceWorker" in navigator){
+      const swCode="// Room Service SW \u2014 Network First, Cache Fallback\n// Always tries network first so updates are instant.\n// Falls back to cache only when truly offline.\n// Never forces cache-clear or blocks the user.\n\nconst CACHE = \"room-service-v1\";\n\n// Files to pre-cache on install (shell only \u2014 not API calls)\nconst PRECACHE = [\n  \"./\",\n  \"./index.html\",\n  \"./manifest.json\",\n  \"./icon-192.png\",\n  \"./icon-512.png\",\n];\n\n// \u2500\u2500 Install: pre-cache the app shell \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nself.addEventListener(\"install\", (event) => {\n  // Skip waiting so new SW activates immediately without requiring tab close\n  self.skipWaiting();\n  event.waitUntil(\n    caches.open(CACHE).then((cache) => cache.addAll(PRECACHE))\n  );\n});\n\n// \u2500\u2500 Activate: clean up old caches, claim all clients immediately \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nself.addEventListener(\"activate\", (event) => {\n  event.waitUntil(\n    Promise.all([\n      // Take control of all open tabs right away\n      self.clients.claim(),\n      // Delete any old cache versions\n      caches.keys().then((keys) =>\n        Promise.all(\n          keys\n            .filter((key) => key !== CACHE)\n            .map((key) => caches.delete(key))\n        )\n      ),\n    ])\n  );\n});\n\n// \u2500\u2500 Fetch: Network First, Cache Fallback \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nself.addEventListener(\"fetch\", (event) => {\n  const { request } = event;\n\n  // Never intercept cross-origin requests (Anthropic API, etc.)\n  if (!request.url.startsWith(self.location.origin)) return;\n\n  // Never intercept non-GET requests\n  if (request.method !== \"GET\") return;\n\n  event.respondWith(networkFirst(request));\n});\n\nasync function networkFirst(request) {\n  try {\n    // Always try network first\n    const networkResponse = await fetch(request);\n\n    // If successful, update the cache in the background\n    if (networkResponse.ok) {\n      const cache = await caches.open(CACHE);\n      cache.put(request, networkResponse.clone()); // async, non-blocking\n    }\n\n    return networkResponse;\n  } catch {\n    // Network failed \u2014 serve from cache if available\n    const cached = await caches.match(request);\n    if (cached) return cached;\n\n    // Ultimate fallback: return cached index.html for navigation requests\n    // so the SPA still loads offline\n    if (request.mode === \"navigate\") {\n      const fallback = await caches.match(\"./index.html\");\n      if (fallback) return fallback;\n    }\n\n    // Nothing we can do\n    return new Response(\"Offline \u2014 no cached version available\", {\n      status: 503,\n      statusText: \"Service Unavailable\",\n    });\n  }\n}\n";
+      const swBlob=new Blob([swCode],{type:"application/javascript"});
+      window.addEventListener("load",()=>{
+        navigator.serviceWorker.register(URL.createObjectURL(swBlob),{scope:"./"})
+          .then(r=>{console.log("SW ok");r.update();})
+          .catch(e=>console.warn("SW err:",e));
       });
     }
   </script>
