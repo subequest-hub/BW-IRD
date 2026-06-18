@@ -967,6 +967,8 @@ function PhotoScanner({ onExtracted, onSkip }) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "x-api-key": ANTHROPIC_API_KEY,
+          "anthropic-version": "2023-06-01",
           "anthropic-dangerous-direct-browser-access": "true",
         },
         body: JSON.stringify({
@@ -1514,7 +1516,7 @@ function MenuTab() {
 }
 
 // ─── VERSION ──────────────────────────────────────────────────────────────────
-const APP_VERSION = "1.4.8";
+const APP_VERSION = "1.4.9";
 const APP_UPDATED = "Jun 18, 2026";
 
 // ─── SETTINGS TAB ─────────────────────────────────────────────────────────────
