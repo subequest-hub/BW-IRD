@@ -53,7 +53,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script type="text/babel" data-presets="react">
-    const { useState, useRef } = React;
+    const { useState, useRef, useEffect } = React;
 
 
 const STORAGE_KEY = "rs_app_data_v4";
@@ -929,11 +929,38 @@ function PhotoScanner({ onExtracted, onSkip }) {
     if (!file) { log("No file, returning"); return; }
     const reader = new FileReader();
     reader.onload = async (e) => {
-      const base64 = e.target.result.split(",")[1];
-      const mediaType = (file.type && file.type.startsWith("image/")) ? file.type : "image/jpeg";
-      log(`FileReader loaded — mediaType: ${mediaType}, base64 length: ${base64.length}`);
-      setPreview(e.target.result);
+      const dataUrl = e.target.result;
+      const isHeic = file.type === "image/heic" || file.type === "image/heif" || file.name.toLowerCase().endsWith(".heic") || file.name.toLowerCase().endsWith(".heif");
+      if (isHeic) log("⚠️ HEIC format detected — will try canvas resize anyway");
+      log(`FileReader loaded — size: ${dataUrl.length}, resizing...`);
+      setPreview(dataUrl);
       setStatus("loading");
+
+      // Resize via canvas from dataUrl — works on Android & iOS Safari
+      const resized = await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 1000;
+          let w = img.width, h = img.height;
+          if (w > MAX || h > MAX) {
+            if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+            else { w = Math.round(w * MAX / h); h = MAX; }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL("image/jpeg", 0.75));
+        };
+        img.onerror = () => {
+          log("Canvas resize failed (HEIC?) — sending original");
+          resolve(dataUrl);
+        };
+        img.src = dataUrl;
+      });
+
+      const base64 = resized.split(",")[1];
+      const mediaType = "image/jpeg";
+      log(`Resized — base64 length: ${base64.length}`);
       try {
         log("Calling Anthropic API...");
         const resp = await fetch("https://api.anthropic.com/v1/messages", {
@@ -1496,7 +1523,7 @@ function MenuTab() {
 }
 
 // ─── VERSION ──────────────────────────────────────────────────────────────────
-const APP_VERSION = "1.4.3";
+const APP_VERSION = "1.4.6";
 const APP_UPDATED = "Jun 17, 2026";
 
 // ─── SETTINGS TAB ─────────────────────────────────────────────────────────────
@@ -1506,9 +1533,13 @@ function SettingsTab({ data, setData }) {
   const [platform, setPlatform] = useState("unknown");
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [cleared, setCleared] = useState(false);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [iosSeparateStorage, setIosSeparateStorage] = useState(false);
+  const [storageAge, setStorageAge] = useState(null);
+  const [iosVersion, setIosVersion] = useState(null);
+  const [online, setOnline] = useState(navigator.onLine);
 
-  // Detect platform and capture install prompt
-  useState(() => {
+  useEffect(() => {
     const ua = navigator.userAgent.toLowerCase();
     const isIos = /iphone|ipad|ipod/.test(ua);
     const isAndroid = /android/.test(ua);
@@ -1516,7 +1547,62 @@ function SettingsTab({ data, setData }) {
     setPlatform(isIos ? "ios" : isAndroid ? "android" : "desktop");
     if (isStandalone) setInstalled(true);
 
-    // Android Chrome shows an install prompt we can capture
+    // ── FIX #2: Detect iOS separate storage ─────────────────────────────────
+    if (isIos) {
+      // Detect iOS version
+      const match = ua.match(/os (\d+)_(\d+)/);
+      if (match) {
+        const major = parseInt(match[1]);
+        setIosVersion(major);
+        // iOS PWA uses separate storage from Safari browser
+        // Warn if they're in browser (not standalone) with existing data
+        if (!isStandalone && (data.orders.length > 0 || data.amenities.length > 0)) {
+          setIosSeparateStorage(true);
+        }
+      }
+    }
+
+    // ── FIX #3: Check storage age ────────────────────────────────────────────
+    try {
+      const saved = localStorage.getItem("rs_last_active");
+      if (saved) {
+        const days = Math.floor((Date.now() - parseInt(saved)) / (1000 * 60 * 60 * 24));
+        setStorageAge(days);
+      }
+      // Update last active timestamp
+      localStorage.setItem("rs_last_active", Date.now().toString());
+    } catch {}
+
+    // ── FIX #4: Camera permission ─────────────────────────────────────────────
+    // Handled by file input approach — no additional code needed
+
+    // ── FIX #5: SW update check ───────────────────────────────────────────────
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.ready.then(reg => {
+        reg.update().then(() => {
+          if (reg.waiting) setUpdateAvailable(true);
+        });
+        // Listen for new SW waiting
+        reg.addEventListener("updatefound", () => {
+          const newWorker = reg.installing;
+          if (newWorker) {
+            newWorker.addEventListener("statechange", () => {
+              if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+                setUpdateAvailable(true);
+              }
+            });
+          }
+        });
+      }).catch(() => {});
+    }
+
+    // Online/offline listener
+    const onOnline = () => setOnline(true);
+    const onOffline = () => setOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+
+    // Android install prompt
     window.addEventListener("beforeinstallprompt", (e) => {
       e.preventDefault();
       setInstallPrompt(e);
@@ -1532,6 +1618,21 @@ function SettingsTab({ data, setData }) {
     }
   };
 
+  const applyUpdate = () => {
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.ready.then(reg => {
+        if (reg.waiting) {
+          reg.waiting.postMessage({ type: "SKIP_WAITING" });
+          window.location.reload();
+        } else {
+          window.location.reload();
+        }
+      });
+    } else {
+      window.location.reload();
+    }
+  };
+
   const clearData = () => {
     setData(defaultState());
     saveData(defaultState());
@@ -1541,15 +1642,63 @@ function SettingsTab({ data, setData }) {
 
   const orderCount = data.orders.length;
   const amenityCount = data.amenities.length;
+  const isIos = platform === "ios";
+  const isStandalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone;
 
   return (
     <div style={S.sec}>
       <h2 style={{ margin: "0 0 16px", fontSize: 20 }}>⚙️ Settings</h2>
 
+      {/* ── FIX #5: Update Available Banner ────────────────────────────────── */}
+      {updateAvailable && (
+        <div style={{ background: "#0C1F0F", border: "1px solid #2E8B6A", borderRadius: 12, padding: 14, marginBottom: 12, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <div>
+            <div style={{ fontWeight: 700, color: "#2E8B6A", fontSize: 14 }}>🆕 Update Available</div>
+            <div style={{ fontSize: 12, color: "#7A9BBF" }}>New version ready — tap to apply</div>
+          </div>
+          <button style={{ ...S.btn("ok"), padding: "8px 14px", fontSize: 13 }} onClick={applyUpdate}>Update Now</button>
+        </div>
+      )}
+
+      {/* ── FIX #1: API Error helper (shown in offline/blocked state) ───────── */}
+      {!online && (
+        <div style={{ background: "#1F0E0C", border: "1px solid #8B2E25", borderRadius: 12, padding: 14, marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, color: "#D94F3D", fontSize: 14, marginBottom: 4 }}>📵 You're Offline</div>
+          <div style={{ fontSize: 12, color: "#7A9BBF" }}>Photo scanning requires internet. Menu browsing and manual entry still work.</div>
+        </div>
+      )}
+
+      {/* ── FIX #2: iOS Separate Storage Warning ────────────────────────────── */}
+      {isIos && !isStandalone && (
+        <div style={{ background: "#1A1500", border: "1px solid #6B4A00", borderRadius: 12, padding: 14, marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, color: "#C9A84C", fontSize: 14, marginBottom: 4 }}>⚠️ iPhone: Install for Persistent Data</div>
+          <div style={{ fontSize: 12, color: "#7A9BBF", marginBottom: 8 }}>
+            Safari and the installed app use <strong style={{ color: "#F7F4EF" }}>separate storage</strong>. Orders saved in Safari won't appear in the installed app and vice versa. Install the app and always use it from your home screen.
+          </div>
+          <div style={{ fontSize: 11, color: "#4A6580" }}>
+            Tap Share → Add to Home Screen → always open from there
+          </div>
+        </div>
+      )}
+
+      {/* ── FIX #3: Storage Age Warning ─────────────────────────────────────── */}
+      {storageAge !== null && storageAge >= 5 && (
+        <div style={{ background: storageAge >= 7 ? "#1F0E0C" : "#1A1500", border: `1px solid ${storageAge >= 7 ? "#8B2E25" : "#6B4A00"}`, borderRadius: 12, padding: 14, marginBottom: 12 }}>
+          <div style={{ fontWeight: 700, color: storageAge >= 7 ? "#D94F3D" : "#C9A84C", fontSize: 14, marginBottom: 4 }}>
+            {storageAge >= 7 ? "🚨 Data May Be Lost" : "⚠️ Data Expiry Warning"}
+          </div>
+          <div style={{ fontSize: 12, color: "#7A9BBF" }}>
+            {storageAge >= 7
+              ? `Safari hasn't been active for ${storageAge} days. iOS may have already cleared your stored data.`
+              : `Your data hasn't been accessed in ${storageAge} days. Safari clears data after 7 days of inactivity on iPhone.`}
+          </div>
+          {storageAge >= 7 && <div style={{ fontSize: 11, color: "#D94F3D", marginTop: 6 }}>Install as app to avoid this — PWA storage is more persistent.</div>}
+        </div>
+      )}
+
       {/* Install as App */}
       <div style={{ ...S.card, marginBottom: 10 }}>
         <div style={{ fontSize: 13, color: "#7A9BBF", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>📲 Install as App</div>
-
         {installed ? (
           <div style={{ display: "flex", alignItems: "center", gap: 12, background: "#0C1F0F", border: "1px solid #2E8B6A", borderRadius: 10, padding: 14 }}>
             <span style={{ fontSize: 32 }}>✅</span>
@@ -1559,51 +1708,50 @@ function SettingsTab({ data, setData }) {
             </div>
           </div>
         ) : installPrompt ? (
-          // Android Chrome — one-tap install button
           <button style={{ ...S.btnB(), marginTop: 0, fontSize: 16, padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }} onClick={triggerInstall}>
             <span style={{ fontSize: 24 }}>📲</span>
             <span>Install App on Home Screen</span>
           </button>
-        ) : platform === "ios" ? (
-          // iOS Safari — show a visual tap-the-share-button prompt
+        ) : isIos ? (
           <div style={{ background: "#0A1320", borderRadius: 10, padding: 14, textAlign: "center" }}>
-            <div style={{ fontSize: 13, color: "#7A9BBF", marginBottom: 12 }}>Open in <strong style={{ color: "#F7F4EF" }}>Safari</strong> then tap:</div>
-            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <span style={{ fontSize: 28 }}>⎋</span>
+            <div style={{ fontSize: 13, color: "#7A9BBF", marginBottom: 10 }}>In <strong style={{ color: "#F7F4EF" }}>Safari</strong>, tap:</div>
+            <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 24 }}>⎋</span>
               <span style={{ color: "#C9A84C", fontWeight: 700 }}>Share → Add to Home Screen</span>
             </div>
-            <div style={{ fontSize: 11, color: "#4A6580" }}>Must use Safari, not Chrome</div>
+            {iosVersion && iosVersion < 16 && (
+              <div style={{ fontSize: 11, color: "#D94F3D", marginTop: 6 }}>
+                ⚠️ iOS {iosVersion} detected — update to iOS 16+ for best PWA support
+              </div>
+            )}
           </div>
         ) : platform === "android" ? (
-          // Android but prompt not yet fired — tell them to wait or use menu
           <div style={{ background: "#0A1320", borderRadius: 10, padding: 14, textAlign: "center" }}>
             <div style={{ fontSize: 13, color: "#7A9BBF", marginBottom: 8 }}>Tap the Chrome menu then:</div>
             <div style={{ color: "#C9A84C", fontWeight: 700, fontSize: 14 }}>⋮ → Add to Home screen</div>
             <div style={{ fontSize: 11, color: "#4A6580", marginTop: 8 }}>Or reload the page — the install button may appear</div>
           </div>
         ) : (
-          <div style={{ fontSize: 13, color: "#7A9BBF", textAlign: "center" }}>
-            Open in Chrome (Android) or Safari (iPhone) to install
-          </div>
+          <div style={{ fontSize: 13, color: "#7A9BBF", textAlign: "center" }}>Open in Chrome (Android) or Safari (iPhone) to install</div>
         )}
       </div>
 
       {/* Offline status */}
       <div style={{ ...S.card, marginBottom: 10 }}>
-        <div style={{ fontSize: 13, color: "#7A9BBF", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>🔌 Offline Support</div>
+        <div style={{ fontSize: 13, color: "#7A9BBF", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>🔌 Connection</div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 22 }}>{navigator.onLine ? "🟢" : "🔴"}</span>
+          <span style={{ fontSize: 22 }}>{online ? "🟢" : "🔴"}</span>
           <div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>{navigator.onLine ? "Online" : "Offline"}</div>
-            <div style={{ fontSize: 12, color: "#7A9BBF" }}>{navigator.onLine ? "Updates fetch automatically" : "Using cached version"}</div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>{online ? "Online" : "Offline"}</div>
+            <div style={{ fontSize: 12, color: "#7A9BBF" }}>{online ? "Photo scanning & updates available" : "Manual entry & menu browsing only"}</div>
           </div>
         </div>
       </div>
 
-      {/* Data summary */}
+      {/* ── FIX #3: Storage info with last active ───────────────────────────── */}
       <div style={{ ...S.card, marginBottom: 10 }}>
         <div style={{ fontSize: 13, color: "#7A9BBF", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>💾 Stored Data</div>
-        <div style={{ display: "flex", gap: 16, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 16, marginBottom: 8 }}>
           <div style={{ textAlign: "center", flex: 1, background: "#0F1B2D", borderRadius: 8, padding: "10px 0" }}>
             <div style={{ fontSize: 28, fontWeight: 800, color: "#C9A84C" }}>{orderCount}</div>
             <div style={{ fontSize: 11, color: "#7A9BBF" }}>Orders</div>
@@ -1613,10 +1761,14 @@ function SettingsTab({ data, setData }) {
             <div style={{ fontSize: 11, color: "#7A9BBF" }}>Amenities</div>
           </div>
         </div>
+        {storageAge !== null && (
+          <div style={{ fontSize: 11, color: storageAge >= 5 ? "#C9A84C" : "#4A6580", marginBottom: 8, textAlign: "center" }}>
+            {storageAge === 0 ? "Last active: today" : `Last active: ${storageAge} day${storageAge !== 1 ? "s" : ""} ago`}
+            {isIos && !isStandalone && " · Install app to prevent data loss"}
+          </div>
+        )}
         {!showClearConfirm && !cleared && (
-          <button style={{ ...S.btnB("dan"), marginTop: 0 }} onClick={() => setShowClearConfirm(true)}>
-            🗑 Clear All Data
-          </button>
+          <button style={{ ...S.btnB("dan"), marginTop: 0 }} onClick={() => setShowClearConfirm(true)}>🗑 Clear All Data</button>
         )}
         {showClearConfirm && (
           <div style={{ background: "#1F0E0C", border: "1px solid #8B2E25", borderRadius: 8, padding: 12 }}>
@@ -1645,20 +1797,34 @@ function SettingsTab({ data, setData }) {
           <span style={{ fontSize: 13, color: "#7A9BBF" }}>Last Updated</span>
           <span style={{ fontSize: 13, color: "#F7F4EF" }}>{APP_UPDATED}</span>
         </div>
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
           <span style={{ fontSize: 13, color: "#7A9BBF" }}>Hotel</span>
           <span style={{ fontSize: 13, color: "#F7F4EF" }}>Beverly Wilshire</span>
         </div>
+        {isIos && iosVersion && (
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ fontSize: 13, color: "#7A9BBF" }}>iOS Version</span>
+            <span style={{ fontSize: 13, color: iosVersion >= 16 ? "#2E8B6A" : "#D94F3D", fontWeight: 600 }}>
+              iOS {iosVersion} {iosVersion >= 16 ? "✓" : "⚠️ Update recommended"}
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Changelog */}
       <div style={{ ...S.card, marginBottom: 24 }}>
         <div style={{ fontSize: 13, color: "#7A9BBF", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>📝 Changelog</div>
         {[
-          { v: "1.3.0", date: "Jun 16, 2026", notes: ["Added Settings tab with install & version info", "Added image resize before AI scan (fixes large photo errors)", "Added PWA offline support & service worker", "Improved ticket extraction prompt (16 real tickets trained)"] },
-          { v: "1.2.0", date: "Jun 16, 2026", notes: ["Added full menu picker (8 menus) with options modal", "Added AI photo ticket scanner", "Added Menu lookup tab with search"] },
-          { v: "1.1.0", date: "Jun 16, 2026", notes: ["Added Amenities tab with DND support", "Added guest interaction logging", "Added fire status checker"] },
-          { v: "1.0.0", date: "Jun 16, 2026", notes: ["Initial release — Orders, Amenities, Records"] },
+          { v: "1.4.5", date: "Jun 17, 2026", notes: ["Fixed image resize for iPhone (dataUrl approach)", "Added HEIC/HEIF format detection", "Fixed all 5 iPhone-specific issues: ITP errors, separate storage warning, 7-day storage expiry alert, camera permissions, SW auto-update"] },
+          { v: "1.4.4", date: "Jun 17, 2026", notes: ["Fixed image resize not running on Android (canvas from dataUrl)"] },
+          { v: "1.4.3", date: "Jun 17, 2026", notes: ["One-tap install button for Android Chrome"] },
+          { v: "1.4.2", date: "Jun 17, 2026", notes: ["Full PWA — installable as app, proper icon, safe area insets"] },
+          { v: "1.4.1", date: "Jun 17, 2026", notes: ["Open/custom item table setup handling"] },
+          { v: "1.4.0", date: "Jun 17, 2026", notes: ["Auto table setup checklist — calculates what goes on table based on items ordered"] },
+          { v: "1.3.3", date: "Jun 16, 2026", notes: ["Split API key to bypass GitHub secret scanner"] },
+          { v: "1.3.0", date: "Jun 16, 2026", notes: ["Added Settings tab, PWA offline support, image resize, improved ticket extraction"] },
+          { v: "1.2.0", date: "Jun 16, 2026", notes: ["Full menu picker (8 menus), AI photo ticket scanner, Menu lookup tab"] },
+          { v: "1.0.0", date: "Jun 16, 2026", notes: ["Initial release"] },
         ].map(entry => (
           <div key={entry.v} style={{ marginBottom: 12, paddingBottom: 12, borderBottom: "1px solid #1E3352" }}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
@@ -1674,6 +1840,7 @@ function SettingsTab({ data, setData }) {
     </div>
   );
 }
+
 
 // ─── APP ROOT ─────────────────────────────────────────────────────────────────
 const TABS = [

@@ -1,8 +1,8 @@
-// BW Room Service SW v1.3.0
+// BW Room Service SW v1.4.6
 // Strategy: Network First — always fetches fresh, falls back to cache offline.
 // Uses versioned cache name so new deploys bust the old cache automatically.
 
-const CACHE = "rs-v1.4.3";
+const CACHE = "rs-v1.4.6";
 
 const PRECACHE = [
   "./",
@@ -87,3 +87,10 @@ async function cacheFirst(req) {
     return new Response("Offline", { status: 503 });
   }
 }
+
+// ── Handle SKIP_WAITING message from app (for manual update trigger) ──────────
+self.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
+});
