@@ -2,7 +2,7 @@
 // Strategy: Network First — always fetches fresh, falls back to cache offline.
 // Uses versioned cache name so new deploys bust the old cache automatically.
 
-const CACHE = "rs-v1.5.1";
+const CACHE = "rs-v1.8.0";
 
 const PRECACHE = [
   "./",
